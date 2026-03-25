@@ -261,6 +261,16 @@
     animation: spin 0.6s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s infinite;
+    border-radius: var(--radius);
+  }
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  .skeleton-card { height: 80px; }
+  .skeleton-chart { height: 220px; margin-bottom: 0; }
+  .skeleton-row { height: 44px; margin-bottom: 1px; border-radius: 0; }
 
   @media (max-width: 480px) {
     .add-grid { grid-template-columns: 1fr 1fr; }
@@ -324,6 +334,9 @@ const METRICS = [
 ];
 const CHART_COLORS = { weight: '#2563eb', muscle: '#16a34a', fat: '#dc2626' };
 
+// 캐시: 두 멤버 데이터를 미리 저장
+const cache = { dad: null, sibling: null };
+
 function formatDate(raw) {
   const d = new Date(raw);
   if (isNaN(d)) return String(raw).slice(0, 10);
@@ -332,26 +345,60 @@ function formatDate(raw) {
   const dd = String(d.getDate() + 1).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
-function formatDateShort(raw) {
-  return formatDate(raw).slice(5);
-}
+function formatDateShort(raw) { return formatDate(raw).slice(5); }
 
 let currentMember = 'dad';
 let selectedMetric = 'weight';
 let records = [];
 let chartInstance = null;
 
-async function fetchRecords() {
-  document.getElementById('log-area').innerHTML = '<div class="loading"><div class="spinner"></div>불러오는 중...</div>';
+function showSkeleton() {
+  document.getElementById('metric-grid').innerHTML =
+    ['','',''].map(() => `<div class="skeleton skeleton-card"></div>`).join('');
+  document.querySelector('.chart-card').innerHTML =
+    `<div class="skeleton skeleton-chart"></div>`;
+  document.getElementById('log-area').innerHTML =
+    ['','',''].map(() => `<div class="skeleton skeleton-row"></div>`).join('');
+}
+
+async function fetchAll() {
+  // 두 멤버 동시에 fetch
+  const [dadRes, sibRes] = await Promise.all([
+    fetch(`${API_URL}?action=get&member=dad`),
+    fetch(`${API_URL}?action=get&member=sibling`)
+  ]);
+  const [dadData, sibData] = await Promise.all([dadRes.json(), sibRes.json()]);
+  cache.dad = dadData.sort((a,b) => String(a.date).localeCompare(String(b.date)));
+  cache.sibling = sibData.sort((a,b) => String(a.date).localeCompare(String(b.date)));
+}
+
+async function initLoad() {
+  showSkeleton();
   try {
-    const res = await fetch(`${API_URL}?action=get&member=${currentMember}`);
-    records = await res.json();
-    records.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    await fetchAll();
   } catch(e) {
-    records = [];
     showToast('데이터를 불러오지 못했어요');
   }
+  // 차트 카드 HTML 복원
+  document.querySelector('.chart-card').innerHTML = `
+    <div class="chart-header">
+      <span class="chart-title" id="chart-title">체중 추이</span>
+      <span class="chart-subtitle" id="chart-subtitle"></span>
+    </div>
+    <canvas id="myChart" height="160"></canvas>
+    <div id="chart-empty" class="empty-state" style="display:none;">기록을 추가하면 차트가 표시돼요</div>`;
+  records = cache[currentMember] || [];
   render();
+}
+
+async function refreshCache() {
+  try {
+    await fetchAll();
+    records = cache[currentMember] || [];
+    render();
+  } catch(e) {
+    showToast('새로고침 실패');
+  }
 }
 
 function switchMember(m) {
@@ -359,7 +406,20 @@ function switchMember(m) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
     b.classList.toggle('active', Object.keys(MEMBERS)[i] === m);
   });
-  fetchRecords();
+  // 캐시 있으면 즉시 렌더, 없으면 로딩
+  if (cache[m]) {
+    records = cache[m];
+    render();
+  } else {
+    showSkeleton();
+    fetch(`${API_URL}?action=get&member=${m}`)
+      .then(r => r.json())
+      .then(data => {
+        cache[m] = data.sort((a,b) => String(a.date).localeCompare(String(b.date)));
+        records = cache[m];
+        render();
+      });
+  }
 }
 
 function selectMetric(key) {
@@ -514,7 +574,9 @@ async function addRecord() {
     document.getElementById('inp-muscle').value = '';
     document.getElementById('inp-fat').value = '';
     showToast('기록이 저장됐어요');
-    await fetchRecords();
+    // 캐시 무효화 후 갱신
+    cache[currentMember] = null;
+    await refreshCache();
   } catch(e) {
     showToast('저장 중 오류가 발생했어요');
   } finally {
@@ -531,7 +593,8 @@ async function deleteRecord(idx) {
       body: JSON.stringify({ action: 'delete', member: currentMember, index: idx })
     });
     showToast('삭제됐어요');
-    await fetchRecords();
+    cache[currentMember] = null;
+    await refreshCache();
   } catch(e) {
     showToast('삭제 중 오류가 발생했어요');
   }
@@ -545,7 +608,7 @@ function showToast(msg) {
 }
 
 document.getElementById('inp-date').value = new Date().toISOString().slice(0, 10);
-fetchRecords();
+initLoad();
 </script>
 </body>
 </html>
