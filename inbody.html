@@ -118,6 +118,18 @@
   .delta-uppos { color: var(--green); }
   .delta-downpos { color: var(--red); }
 
+  .badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-normal { background: #dcfce7; color: #15803d; }
+  .badge-high   { background: #fee2e2; color: #b91c1c; }
+  .badge-low    { background: #e0f2fe; color: #0369a1; }
+
   .chart-card {
     background: var(--surface);
     border-radius: var(--radius);
@@ -327,12 +339,66 @@
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbw_roe9XxMM_QlxoWYPva5r3qe4tTgBo9Jr8QmBJAFgH_coxBq6JoyYpqoo7ZAX4Gp5rA/exec';
 const MEMBERS = { dad: '아빠', sibling: '백' };
+const PROFILES = {
+  dad:     { height: 180, gender: 'male' },
+  sibling: { height: 163, gender: 'female' },
+};
 const METRICS = [
   { key: 'weight', label: '체중', unit: 'kg', cls: 'weight' },
   { key: 'muscle', label: '골격근량', unit: 'kg', cls: 'muscle' },
   { key: 'fat',    label: '체지방률', unit: '%',  cls: 'fat' },
 ];
 const CHART_COLORS = { weight: '#2563eb', muscle: '#16a34a', fat: '#dc2626' };
+
+// 표준 판단 함수
+function getStatus(key, val, member) {
+  if (val === '-' || val == null || val === '') return null;
+  const v = parseFloat(val);
+  const { height, gender } = PROFILES[member];
+  const h = height / 100;
+
+  if (key === 'weight') {
+    const bmi = v / (h * h);
+    if (bmi < 18.5) return 'low';
+    if (bmi <= 22.9) return 'normal';
+    return 'high';
+  }
+
+  if (key === 'muscle') {
+    // 표준 체중 기반 개인별 기준 (±10%)
+    const stdWeight = (height - 100) * 0.9;
+    const ratio = gender === 'male' ? 0.45 : 0.40;
+    const stdMuscle = stdWeight * ratio;
+    if (v < stdMuscle * 0.9) return 'low';
+    if (v <= stdMuscle * 1.1) return 'normal';
+    return 'high';
+  }
+
+  if (key === 'fat') {
+    // 나이대 + 성별 기준
+    // 아빠: 62세 남성 / 백: 23세 여성
+    if (gender === 'male') {
+      // 60대 남성: 18~25%
+      if (v < 18) return 'low';
+      if (v <= 25) return 'normal';
+      return 'high';
+    } else {
+      // 20대 여성: 18~28%
+      if (v < 18) return 'low';
+      if (v <= 28) return 'normal';
+      return 'high';
+    }
+  }
+  return null;
+}
+
+function statusBadge(status) {
+  if (!status) return '';
+  if (status === 'normal') return `<div class="badge badge-normal">표준</div>`;
+  if (status === 'high')   return `<div class="badge badge-high">표준이상</div>`;
+  if (status === 'low')    return `<div class="badge badge-low">표준이하</div>`;
+  return '';
+}
 
 // 캐시: 두 멤버 데이터를 미리 저장
 const cache = { dad: null, sibling: null };
@@ -440,20 +506,12 @@ function renderMetrics() {
   const latest = records.length ? records[records.length - 1] : null;
   document.getElementById('metric-grid').innerHTML = METRICS.map(m => {
     const val = latest && latest[m.key] != null && latest[m.key] !== '' ? latest[m.key] : '-';
-    const delta = getDelta(m.key);
-    let deltaHtml = '';
-    if (delta !== null && delta !== 0) {
-      const sign = delta > 0 ? '+' : '';
-      const d = delta.toFixed(1);
-      let cls = '';
-      if (m.key === 'muscle') cls = delta > 0 ? 'delta-uppos' : 'delta-downpos';
-      else cls = delta > 0 ? 'delta-up' : 'delta-down';
-      deltaHtml = `<div class="metric-delta ${cls}">${sign}${d} ${m.unit}</div>`;
-    }
+    const status = getStatus(m.key, val, currentMember);
+    const badge = statusBadge(status);
     return `<div class="metric-card ${m.cls}${selectedMetric === m.key ? ' selected' : ''}" onclick="selectMetric('${m.key}')">
       <div class="metric-label">${m.label}</div>
       <div class="metric-value">${val}<span class="metric-unit">${val !== '-' ? ' ' + m.unit : ''}</span></div>
-      ${deltaHtml}
+      ${badge}
     </div>`;
   }).join('');
 }
